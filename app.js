@@ -1,6 +1,6 @@
 'use strict';
 /* LIFT 3: offline workout tracker, calorie tracker and on-device coach */
-const VERSION = '3.1.0';
+const VERSION = '3.2.0';
 const KEY = 'lift3:data';
 
 /* ================= helpers ================= */
@@ -180,6 +180,7 @@ function fresh() {
     v: 2, profile: null, targets: null, mode: 'gym', prog: clone(DEFAULT_PROG),
     ladders: { push: 1, pull: 1, dip: 1 }, workouts: [], bw: [], food: {}, customFoods: [], customEx: {},
     recent: [], cardio: [], chat: [], settings: { rest: 90, hideInstall: false, lastDeload: null }, active: null,
+    deleted: {}, updated: 0, sync: null,
   };
 }
 function load() {
@@ -197,9 +198,12 @@ function load() {
 let S = load();
 let saveTimer = null;
 function save() {
-  clearTimeout(saveTimer); saveTimer = null;
+  clearTimeout(saveTimer); saveTimer = null; S.updated = Date.now();
   try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { toast('Storage is full. Export a backup in Settings.'); }
+  scheduleSync();
 }
+function saveQuiet() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} }
+function markDeleted(key) { S.deleted = S.deleted || {}; S.deleted[key] = Date.now(); }
 function saveSoon() { clearTimeout(saveTimer); saveTimer = setTimeout(save, 400); }
 
 const getEx = id => EX[id] || S.customEx[id] || null;
@@ -646,7 +650,7 @@ function vToday() {
   const p = S.profile || {}, tk = dkey(), hr = new Date().getHours();
   const g = hr < 12 ? 'Morning' : hr < 18 ? 'Afternoon' : 'Evening';
   let h = header(p.name ? `${g}, ${esc(p.name)}` : `Good ${g.toLowerCase()}`, longDate(tk), `<button class="icon-btn" data-act="settings" aria-label="Settings">${I.gear}</button>`);
-  h += installBanner() + modeToggle() + todayCard();
+  h += syncBanner() + installBanner() + modeToggle() + todayCard();
   const t = dayTotals(tk), T = S.targets;
   h += '<div class="row2">';
   if (T) {
@@ -1001,7 +1005,7 @@ function tdeeSheet(first) {
       <label class="field"><span>Base protein on</span><select class="in" name="pBasis" data-ch="tdee">${o('current', 'Current weight', p.pBasis)}${o('goal', 'Goal weight (better if you carry a lot of body fat)', p.pBasis)}</select></label>
     </form>
     <div id="tdee-out" class="tdee-out">${tdeeOut(p)}</div>
-    <button class="btn primary wide" data-act="tdeeSave">${first ? 'Save and start' : 'Save targets'}</button>`);
+    <button class="btn primary wide" data-act="tdeeSave">${first ? 'Save and start' : 'Save targets'}</button>${first ? '<button class="btn wide" data-act="syncSetup">New phone? Restore from cloud sync</button>' : ''}`);
 }
 function readTDEE() {
   const f = $('#tdee'); const g = n => f.elements[n].value;
@@ -1056,7 +1060,8 @@ function settingsSheet() {
     <p class="note" style="margin-top:-6px">Each exercise has its own rest time. This is used for custom exercises.</p>
     <h3 class="list-h">Your data</h3><div class="list">
       <button class="frow" data-act="export"><span><b>Back up data</b><small>Save a file you can restore later. Do this every few weeks.</small></span></button>
-      <button class="frow" data-act="import"><span><b>Restore from backup</b><small>Replaces what is on this phone</small></span></button>
+      <button class="frow" data-act="import"><span><b>Restore or import</b><small>A LIFT backup replaces this phone's data. A FitCoach backup is added to it.</small></span></button>
+      <button class="frow" data-act="syncSetup"><span><b>Cloud sync</b><small>${esc(syncStatusText())}</small></span><span class="kc">${I.right}</span></button>
       <button class="frow" data-act="installHelp"><span><b>Install on your phone</b><small>Open full screen and work offline</small></span></button>
       <button class="frow" data-act="wipe"><span><b style="color:var(--red)">Delete all data</b><small>Cannot be undone</small></span></button></div>
     <p class="note">LIFT ${VERSION}. Your data never leaves this phone.</p>`);
@@ -1124,7 +1129,7 @@ const ACT = {
   editFood: t => {
     const e = (S.food[foodDate] || []).find(x => x.id === t.dataset.id); if (!e) return;
     if (e.fid && foodById(e.fid)) { qtySheet(e.fid, e.qty, e.meal, e.id); return; }
-    confirmSheet(esc(e.name), `${fmt(e.kcal)} kcal, ${fmt(e.p)} g protein.`, 'Delete entry', () => { S.food[foodDate] = S.food[foodDate].filter(x => x.id !== e.id); save(); render(); });
+    confirmSheet(esc(e.name), `${fmt(e.kcal)} kcal, ${fmt(e.p)} g protein.`, 'Delete entry', () => { markDeleted(e.id); S.food[foodDate] = S.food[foodDate].filter(x => x.id !== e.id); save(); render(); });
   },
   saveFood: () => {
     const f = foodById(pendingFood.fid), qty = num($('#fqty').value), meal = $('#fmeal').value;
@@ -1136,7 +1141,7 @@ const ACT = {
     S.recent = [{ fid: f.id, qty }, ...S.recent.filter(r => r.fid !== f.id)].slice(0, 12);
     save(); closeSheet(); if (view !== 'food' && view !== 'today') view = 'food'; render(); toast(`${f.name} added`);
   },
-  delFood: t => { S.food[foodDate] = (S.food[foodDate] || []).filter(x => x.id !== t.dataset.id); save(); closeSheet(); render(); },
+  delFood: t => { markDeleted(t.dataset.id); S.food[foodDate] = (S.food[foodDate] || []).filter(x => x.id !== t.dataset.id); save(); closeSheet(); render(); },
   quickAdd: () => {
     sheet(`<h2>Quick add</h2><label class="field"><span>Name (optional)</span><input class="in" id="qname" placeholder="Takeaway, braai, etc."></label>
       <div class="grid2"><label class="field"><span>Calories</span><input class="in" id="qkcal" inputmode="numeric"></label><label class="field"><span>Protein (g, optional)</span><input class="in" id="qp" inputmode="decimal"></label></div>
@@ -1177,23 +1182,28 @@ const ACT = {
   saveBw: () => {
     const v = num($('#bwkg').value), d = $('#bwdate').value || dkey();
     if (!(v > 20 && v < 400)) { toast('Enter a weight in kg'); return; }
-    S.bw = S.bw.filter(b => b.date !== d); S.bw.push({ date: d, kg: r1(v) }); S.bw = sortedBW();
+    if (S.deleted) delete S.deleted['bw:' + d]; S.bw = S.bw.filter(b => b.date !== d); S.bw.push({ date: d, kg: r1(v) }); S.bw = sortedBW();
     if (S.profile && d === S.bw[S.bw.length - 1].date) S.profile.weight = r1(v);
     save(); closeSheet(); render(); toast('Weight saved');
   },
-  delBw: t => confirmSheet('Delete weigh-in?', longDate(t.dataset.d), 'Delete', () => { S.bw = S.bw.filter(b => b.date !== t.dataset.d); save(); render(); }),
+  delBw: t => confirmSheet('Delete weigh-in?', longDate(t.dataset.d), 'Delete', () => { markDeleted('bw:' + t.dataset.d); S.bw = S.bw.filter(b => b.date !== t.dataset.d); save(); render(); }),
   saveCardio: () => {
     const min = num($('#cmin').value); if (!(min > 0)) { toast('Enter minutes'); return; }
     S.cardio.push({ id: uid(), type: $('#ctype').value, min, km: num($('#ckm').value) || null, date: $('#cdate').value || dkey() });
     save(); closeSheet(); render(); toast('Cardio saved');
   },
-  delCardio: t => confirmSheet('Delete cardio entry?', 'This cannot be undone.', 'Delete', () => { S.cardio = S.cardio.filter(c => c.id !== t.dataset.id); save(); render(); }),
-  delWorkout: t => confirmSheet('Delete session?', 'This removes it from your history and charts.', 'Delete', () => { S.workouts = S.workouts.filter(w => w.id !== t.dataset.id); save(); render(); }),
+  delCardio: t => confirmSheet('Delete cardio entry?', 'This cannot be undone.', 'Delete', () => { markDeleted(t.dataset.id); S.cardio = S.cardio.filter(c => c.id !== t.dataset.id); save(); render(); }),
+  delWorkout: t => confirmSheet('Delete session?', 'This removes it from your history and charts.', 'Delete', () => { markDeleted(t.dataset.id); S.workouts = S.workouts.filter(w => w.id !== t.dataset.id); save(); render(); }),
   ask: t => sendChat(t.dataset.q),
   send: () => { const i = $('#chatIn'); if (i && i.value.trim()) sendChat(i.value.trim()); },
   export: exportData,
   import: () => $('#importFile').click(),
-  wipe: () => confirmSheet('Delete all data?', 'Every workout, weigh-in and food entry on this phone will be erased. Back up first if you might want it.', 'Delete everything', () => { localStorage.removeItem(KEY); S = fresh(); render(); tdeeSheet(true); }),
+  wipe: () => confirmSheet('Delete all data?', 'Every workout, weigh-in and food entry on this phone will be erased. Back up first if you might want it.' + (syncOn() ? ' Your cloud copy on GitHub is not touched, and this phone is disconnected from it.' : ''), 'Delete everything', () => { localStorage.removeItem(KEY); S = fresh(); render(); tdeeSheet(true); }),
+  syncSetup: () => syncSheet(),
+  syncConnect: () => syncConnect(),
+  syncNow: () => syncNow(true),
+  syncReconnect: () => { S.syncDraft = { owner: S.sync.owner, repo: S.sync.repo }; S.sync = null; syncState.err = ''; syncState.fatal = false; saveQuiet(); syncSheet(); },
+  syncOff: () => confirmSheet('Turn off cloud sync?', 'Your data stays on this phone, and the copy on GitHub stays where it is. Changes from now on are not backed up.', 'Turn off', () => { S.sync = null; syncState.err = ''; syncState.fatal = false; clearTimeout(syncTimer); saveQuiet(); render(); toast('Cloud sync is off'); }),
   hideInstall: () => { S.settings.hideInstall = true; save(); render(); },
   install: async () => { if (!deferredPrompt) { installHelp(); return; } deferredPrompt.prompt(); try { await deferredPrompt.userChoice; } catch (e) {} deferredPrompt = null; closeSheet(); render(); },
 };
@@ -1208,7 +1218,7 @@ function sendChat(q) {
   setTimeout(() => { let html; try { html = answer(q); } catch (e) { html = '<p>Something went wrong reading your logs. Try asking another way.</p>'; } S.chat.push({ from: 'coach', html }); S.chat = S.chat.slice(-40); save(); render(); scrollChat(); }, 380);
 }
 async function exportData() {
-  const name = `lift-backup-${dkey()}.json`, blob = new Blob([JSON.stringify(S)], { type: 'application/json' });
+  const name = `lift-backup-${dkey()}.json`, blob = new Blob([JSON.stringify(syncPayload())], { type: 'application/json' });
   try { const file = new File([blob], name, { type: 'application/json' }); if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: 'LIFT backup' }); return; } } catch (e) { if (e && e.name === 'AbortError') return; }
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click();
   setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1500); toast('Backup saved');
@@ -1234,16 +1244,248 @@ const CHG = {
     rd.onload = () => {
       try {
         const d = JSON.parse(rd.result);
+        if (d && !Array.isArray(d.workouts) && (Array.isArray(d.weightLog) || Array.isArray(d.history))) { importFitCoach(d); t.value = ''; return; }
         if (!d || !Array.isArray(d.workouts)) throw new Error('bad');
         confirmSheet('Restore this backup?', `${d.workouts.length} sessions and ${(d.bw || []).length} weigh-ins. Everything currently on this phone will be replaced.`, 'Restore', () => {
-          const f = fresh(); S = Object.assign(f, d, { settings: Object.assign(f.settings, d.settings || {}) }); save(); render(); toast('Backup restored');
+          const f = fresh(); const keep = S.sync; S = Object.assign(f, d, { settings: Object.assign(f.settings, d.settings || {}) }, { sync: keep, active: null }); if (!S.v || S.v < 2) { S.prog = clone(DEFAULT_PROG); S.v = 2; } save(); render(); toast('Backup restored');
         });
-      } catch (e) { toast('That file is not a LIFT backup'); }
+      } catch (e) { toast('That file is not a LIFT or FitCoach backup'); }
       t.value = '';
     };
     rd.readAsText(file);
   },
 };
+
+
+
+/* ================= cloud sync (private GitHub repo) ================= */
+// The phone stays the main copy. When there is signal, LIFT copies its data to lift-data.json
+// in a private repo you own. Every sync is a commit, so the repo history doubles as version history.
+const SYNC_FILE = 'lift-data.json';
+const syncState = { busy: false, err: '', fatal: false };
+let syncTimer = null, syncAgain = false;
+const syncOn = () => !!(S.sync && S.sync.token && S.sync.owner && S.sync.repo);
+function syncPayload() { const { sync, active, syncDraft, ...rest } = S; return rest; }
+function hashStr(str) { let h = 5381; for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) | 0; return (h >>> 0).toString(36) + '.' + str.length; }
+const payloadHash = p => hashStr(JSON.stringify(Object.assign({}, p, { updated: 0 })));
+function b64enc(str) { const b = new TextEncoder().encode(str); let bin = ''; for (let i = 0; i < b.length; i += 0x8000) bin += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000)); return btoa(bin); }
+function b64dec(b64) { const bin = atob(b64.replace(/\s/g, '')); const b = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) b[i] = bin.charCodeAt(i); return new TextDecoder().decode(b); }
+function gh(path, opts = {}, cfg = S.sync) {
+  const headers = { Authorization: `Bearer ${cfg.token}`, Accept: opts.accept || 'application/vnd.github+json' };
+  if (opts.body) headers['Content-Type'] = 'application/json';
+  return fetch(`https://api.github.com/repos/${encodeURIComponent(cfg.owner)}/${encodeURIComponent(cfg.repo)}${path}`, { method: opts.method || 'GET', body: opts.body, headers, cache: 'no-store' });
+}
+async function httpErr(r) {
+  let msg = ''; try { msg = (await r.json()).message || ''; } catch (e) {}
+  const err = new Error(); err.status = r.status; err.fatal = true;
+  if (r.status === 401) err.message = 'GitHub rejected the token. It may have expired. Make a new one and reconnect.';
+  else if (r.status === 403 && /rate limit/i.test(msg)) { err.message = 'GitHub is limiting requests. Will try again soon.'; err.fatal = false; }
+  else if (r.status === 403) err.message = 'The token cannot write to this repo. Give it Contents: Read and write.';
+  else if (r.status === 404) err.message = 'Repo not found. Check the name and that the token has access to it.';
+  else { err.message = `Sync failed (error ${r.status}). Will try again.`; err.fatal = false; }
+  return err;
+}
+async function getRemote(cfg = S.sync) {
+  const r = await gh(`/contents/${SYNC_FILE}`, {}, cfg);
+  if (r.status === 404) return null;
+  if (!r.ok) throw await httpErr(r);
+  const meta = await r.json();
+  let text;
+  if (meta.content && meta.encoding === 'base64') text = b64dec(meta.content);
+  else { const r2 = await gh(`/contents/${SYNC_FILE}`, { accept: 'application/vnd.github.raw+json' }, cfg); if (!r2.ok) throw await httpErr(r2); text = await r2.text(); }
+  return { sha: meta.sha, data: JSON.parse(text) };
+}
+async function putRemote(text, sha) {
+  const body = { message: `LIFT sync ${new Date().toISOString().slice(0, 16).replace('T', ' ')}`, content: b64enc(text) };
+  if (sha) body.sha = sha;
+  const r = await gh(`/contents/${SYNC_FILE}`, { method: 'PUT', body: JSON.stringify(body) });
+  if (r.status === 409 || r.status === 422) return { conflict: true };
+  if (!r.ok) throw await httpErr(r);
+  return { sha: (await r.json()).content.sha };
+}
+function trimDeleted(del) { const cut = Date.now() - 180 * 864e5, out = {}; Object.keys(del).forEach(k => { if (del[k] > cut) out[k] = del[k]; }); return out; }
+function mergeData(a, b) { // a = this phone, b = cloud
+  const del = Object.assign({}, b.deleted || {}, a.deleted || {});
+  const gone = (k, i) => !!del[k === 'date' ? 'bw:' + i.date : i[k]];
+  const union = (x = [], y = [], k = 'id') => { const m = new Map(); (y || []).forEach(i => m.set(i[k], i)); (x || []).forEach(i => m.set(i[k], i)); return [...m.values()].filter(i => !gone(k, i)); };
+  const out = (a.updated || 0) >= (b.updated || 0) ? Object.assign({}, b, a) : Object.assign({}, a, b);
+  out.workouts = union(a.workouts, b.workouts).sort((p, q) => p.ts - q.ts);
+  out.cardio = union(a.cardio, b.cardio);
+  out.bw = union(a.bw, b.bw, 'date').sort((p, q) => (p.date < q.date ? -1 : 1));
+  out.customFoods = union(a.customFoods, b.customFoods);
+  out.customEx = Object.assign({}, b.customEx || {}, a.customEx || {});
+  const food = {}; new Set([...Object.keys(a.food || {}), ...Object.keys(b.food || {})]).forEach(k => { const L = union((a.food || {})[k], (b.food || {})[k]); if (L.length) food[k] = L; });
+  out.food = food;
+  out.ladders = {}; ['push', 'pull', 'dip'].forEach(l => { out.ladders[l] = Math.max((a.ladders || {})[l] || 1, (b.ladders || {})[l] || 1); });
+  if (!a.profile && b.profile) { out.profile = b.profile; out.targets = b.targets; }
+  out.deleted = trimDeleted(del);
+  out.updated = Math.max(a.updated || 0, b.updated || 0);
+  return out;
+}
+function applyData(d) {
+  const keep = { sync: S.sync, active: S.active }, f = fresh();
+  S = Object.assign(f, d, { settings: Object.assign(f.settings, d.settings || {}) }, keep);
+  if (!S.v || S.v < 2) { S.prog = clone(DEFAULT_PROG); S.v = 2; }
+}
+const isEmptyLocal = () => !S.profile && !S.workouts.length && !S.bw.length && !Object.keys(S.food).length;
+async function pullRemote() {
+  const r = await getRemote(); if (!r) return false;
+  if (r.sha === S.sync.sha) return false;
+  const local = syncPayload();
+  if (isEmptyLocal() || payloadHash(local) === S.sync.hash) { applyData(r.data); S.sync.sha = r.sha; S.sync.hash = payloadHash(syncPayload()); }
+  else { applyData(mergeData(local, r.data)); S.sync.sha = r.sha; }
+  saveQuiet(); return true;
+}
+async function pushRemote() {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const p = syncPayload(), h = payloadHash(p);
+    if (h === S.sync.hash) return;
+    const res = await putRemote(JSON.stringify(p), S.sync.sha);
+    if (res.conflict) { S.sync.sha = null; const r = await getRemote(); if (r) { applyData(mergeData(syncPayload(), r.data)); S.sync.sha = r.sha; saveQuiet(); } continue; }
+    S.sync.sha = res.sha; S.sync.hash = h; S.sync.last = Date.now(); saveQuiet(); return;
+  }
+  throw Object.assign(new Error('Could not settle changes with the cloud copy. Will try again.'), { fatal: false });
+}
+function scheduleSync(delay = 15000) { if (!syncOn() || syncState.fatal) return; clearTimeout(syncTimer); syncTimer = setTimeout(() => syncNow(), delay); }
+async function syncNow(manual) {
+  if (!syncOn() || (syncState.fatal && !manual)) return;
+  if (!navigator.onLine) { refreshSyncUI(); return; }
+  if (syncState.busy) { syncAgain = true; return; }
+  syncState.busy = true; clearTimeout(syncTimer); refreshSyncUI();
+  let changed = false;
+  try {
+    changed = await pullRemote();
+    await pushRemote();
+    S.sync.last = Date.now(); syncState.err = ''; syncState.fatal = false; saveQuiet();
+    if (manual) toast('Synced');
+  } catch (e) {
+    syncState.err = e instanceof TypeError ? 'Could not reach GitHub. Will try again.' : (e.message || 'Sync failed. Will try again.');
+    syncState.fatal = !!e.fatal;
+    if (!syncState.fatal) scheduleSync(60000);
+    if (manual || syncState.fatal) toast(syncState.err);
+  } finally {
+    syncState.busy = false;
+    if (changed && !$('#sheet-root').innerHTML && !(document.activeElement && document.activeElement.matches('input'))) render();
+    refreshSyncUI();
+    if (syncAgain) { syncAgain = false; scheduleSync(2000); }
+  }
+}
+function ago(ts) { const s = (Date.now() - ts) / 1000; return s < 60 ? 'just now' : s < 3600 ? `${Math.floor(s / 60)} min ago` : s < 86400 ? `${Math.floor(s / 3600)} h ago` : shortDate(dkey(new Date(ts))); }
+function syncStatusText() {
+  if (!syncOn()) return 'Off. Keep a copy of your data in your own private GitHub repo.';
+  if (syncState.busy) return 'Syncing…';
+  if (syncState.err) return syncState.err;
+  if (!navigator.onLine) return 'Waiting for signal. Changes are saved on this phone.';
+  return S.sync.last ? `Synced ${ago(S.sync.last)}` : 'Connected, not synced yet';
+}
+function refreshSyncUI() { const el = $('#sync-status'); if (el) el.textContent = syncStatusText(); }
+function syncBanner() {
+  if (!syncOn() || !syncState.fatal) return '';
+  return `<div class="banner"><div class="grow"><b>Cloud sync has stopped.</b> ${esc(syncState.err)}</div><button class="btn small primary" data-act="syncSetup">Fix</button></div>`;
+}
+function syncSheet() {
+  if (syncOn()) {
+    sheet(`<h2>Cloud sync</h2><div class="card"><p class="muted" style="margin:0 0 4px">Syncing to</p><p><b>${esc(S.sync.owner)}/${esc(S.sync.repo)}</b></p><p class="muted" id="sync-status" style="margin:0">${esc(syncStatusText())}</p></div>
+      <p class="note">LIFT saves on this phone first, then copies to GitHub within a few seconds of any change when you have signal. Each sync is saved in the repo's history, so older versions can be recovered.</p>
+      <button class="btn primary wide" data-act="syncNow">Sync now</button>
+      ${syncState.fatal ? '<button class="btn wide" data-act="syncReconnect">Enter a new token</button>' : ''}
+      <button class="btn wide danger" data-act="syncOff">Turn off cloud sync</button>`);
+    return;
+  }
+  const host = location.hostname.endsWith('.github.io') ? location.hostname.split('.')[0] : '';
+  const prev = S.syncDraft || {};
+  sheet(`<h2>Cloud sync</h2><p class="muted">Copies your data to a private GitHub repo you own, so you can get it back on any phone. Set-up takes about 3 minutes, once.</p>
+    <div class="card"><p><b>1. Make a private repo.</b> On GitHub, create a new repository called <b>lift-data</b>. Set it to <b>Private</b> and tick <b>Add a README</b>.</p>
+    <p><b>2. Make a token.</b> GitHub Settings, Developer settings, Personal access tokens, <b>Fine-grained tokens</b>, Generate new token. Under Repository access pick <b>Only select repositories</b> and choose lift-data. Under Repository permissions set <b>Contents</b> to <b>Read and write</b>. Choose the longest expiry, generate it and copy it.</p>
+    <p style="margin:0"><b>3. Paste it below</b> and tap Connect.</p></div>
+    <label class="field"><span>GitHub username</span><input class="in" id="sy-owner" autocapitalize="off" autocorrect="off" spellcheck="false" value="${esc(prev.owner || host)}"></label>
+    <label class="field"><span>Repo name</span><input class="in" id="sy-repo" autocapitalize="off" autocorrect="off" spellcheck="false" value="${esc(prev.repo || 'lift-data')}"></label>
+    <label class="field"><span>Token</span><input class="in" id="sy-token" type="password" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="github_pat_…"></label>
+    <p class="note" style="margin-top:-4px">The token stays on this phone and only works on that one repo. It is never included in backups.</p>
+    <button class="btn primary wide" data-act="syncConnect">Connect</button>`);
+}
+async function syncConnect() {
+  const cfg = { owner: $('#sy-owner').value.trim(), repo: $('#sy-repo').value.trim(), token: $('#sy-token').value.trim() };
+  if (!cfg.owner || !cfg.repo || !cfg.token) { toast('Fill in all three fields'); return; }
+  if (!navigator.onLine) { toast('Connect needs signal. Try again when you are online.'); return; }
+  const btn = $('[data-act="syncConnect"]'); if (btn) { btn.disabled = true; btn.textContent = 'Connecting…'; }
+  const fail = m => { toast(m); if (btn) { btn.disabled = false; btn.textContent = 'Connect'; } };
+  try {
+    const r = await gh('', {}, cfg);
+    if (!r.ok) { fail((await httpErr(r)).message); return; }
+    const repo = await r.json();
+    if (!repo.private) { fail('That repo is public. Make it private on GitHub first, or anyone could see your data.'); return; }
+    if (repo.permissions && repo.permissions.push === false) { fail('The token can read but not write. Set Contents to Read and write.'); return; }
+    const remote = await getRemote(cfg);
+    const wasEmpty = isEmptyLocal();
+    S.sync = Object.assign(cfg, { sha: null, hash: null, last: null }); delete S.syncDraft;
+    syncState.err = ''; syncState.fatal = false;
+    if (remote) { applyData(wasEmpty ? remote.data : mergeData(syncPayload(), remote.data)); S.sync.sha = remote.sha; if (wasEmpty) S.sync.hash = payloadHash(syncPayload()); }
+    saveQuiet();
+    await pushRemote(); S.sync.last = Date.now(); saveQuiet();
+    closeSheet(true); render(); if (!S.profile) tdeeSheet(true);
+    toast(remote && wasEmpty ? 'Your data is back on this phone' : remote ? 'Connected. This phone and the cloud copy are merged.' : 'Connected. Your data is now backed up.');
+  } catch (e) {
+    fail(e instanceof TypeError ? 'Could not reach GitHub. Check your connection.' : e.message || 'Could not connect.');
+  }
+}
+
+/* ================= FitCoach (old app) import ================= */
+// FitCoach kept: weigh-ins, daily calorie/protein totals, and only the current day's exercises and meals.
+function convertFitCoach(d) {
+  const lbs = /lb/i.test((d.profile && d.profile.unit) || '');
+  const toKg = v => r1(lbs ? num(v) * 0.45359 : num(v));
+  const bw = (d.weightLog || []).map(w => ({ date: String(w.date || '').slice(0, 10), kg: toKg(w.weight) }))
+    .filter(w => /^\d{4}-\d\d-\d\d$/.test(w.date) && w.kg > 20 && w.kg < 400);
+  const food = {};
+  const mealOf = t => (/break/i.test(t) ? 'Breakfast' : /lunch/i.test(t) ? 'Lunch' : /dinner|supper/i.test(t) ? 'Dinner' : 'Snacks');
+  (d.history || []).forEach(h => {
+    const date = String(h.date || '').slice(0, 10);
+    if (!/^\d{4}-\d\d-\d\d$/.test(date) || !(num(h.calories) > 0)) return;
+    food[date] = [{ id: uid(), fid: null, name: 'Day total from FitCoach', qty: 1, unit: 'each', meal: 'Snacks', kcal: num(h.calories), p: num(h.protein), c: 0, f: 0 }];
+  });
+  const day = String(d.todayKey || '').slice(0, 10);
+  if (/^\d{4}-\d\d-\d\d$/.test(day) && (d.todayMeals || []).length) {
+    food[day] = d.todayMeals.map(m => ({ id: uid(), fid: null, name: String(m.name || 'Meal'), qty: 1, unit: 'each', meal: mealOf(m.mealType || ''), kcal: num(m.calories), p: num(m.protein), c: num(m.carbs), f: num(m.fat) }));
+  }
+  let workout = null; const newEx = {};
+  const strength = (d.todayWorkouts || []).filter(x => x && x.name && num(x.sets) > 0 && num(x.reps) > 0);
+  if (/^\d{4}-\d\d-\d\d$/.test(day) && strength.length) {
+    const ex = strength.map(x => {
+      const nm = String(x.name).trim();
+      let id = Object.keys(EX).find(k => EX[k].name.toLowerCase() === nm.toLowerCase()) || Object.keys(S.customEx).find(k => S.customEx[k].name.toLowerCase() === nm.toLowerCase());
+      if (!id) {
+        id = Object.keys(newEx).find(k => newEx[k].name.toLowerCase() === nm.toLowerCase());
+        if (!id) { const like = getEx(matchExercise(nm.toLowerCase())); id = 'c_' + uid(); newEx[id] = { name: nm, type: 'wr', m: like ? like.m.slice() : ['core'], inc: 2, sets: 3, lo: 8, hi: 12, rest: null, custom: true }; }
+      }
+      const w = lbs ? r1(num(x.weight) * 0.45359) : num(x.weight);
+      return { id, name: nm, type: 'wr', ladder: null, level: null, sets: Array.from({ length: Math.min(10, num(x.sets)) }, () => ({ w, r: num(x.reps) })) };
+    });
+    const ts = pkey(day).getTime() + 12 * 3600e3;
+    workout = { id: uid(), date: day, ts, end: ts + 3600e3, mode: S.mode, dayId: 'import', name: 'Imported from FitCoach', color: 'white', ex,
+      volume: Math.round(ex.reduce((v, e) => v + e.sets.reduce((a, s) => a + s.w * s.r, 0), 0)), sets: ex.reduce((n, e) => n + e.sets.length, 0) };
+  }
+  return { bw, food, workout, newEx, name: d.profile && d.profile.name && d.profile.name !== 'Athlete' ? String(d.profile.name) : '' };
+}
+function importFitCoach(d) {
+  const c = convertFitCoach(d);
+  const bwNew = c.bw.filter(b => !S.bw.some(x => x.date === b.date));
+  const foodNew = Object.keys(c.food).filter(k => !(S.food[k] || []).length);
+  const wNew = c.workout && !S.workouts.some(w => w.dayId === 'import' && w.date === c.workout.date) ? c.workout : null;
+  if (!bwNew.length && !foodNew.length && !wNew) { toast('Nothing new to bring over from that file'); return; }
+  const parts = [];
+  if (bwNew.length) parts.push(`${bwNew.length} weigh-in${bwNew.length > 1 ? 's' : ''}`);
+  if (foodNew.length) parts.push(`${foodNew.length} day${foodNew.length > 1 ? 's' : ''} of calorie and protein totals`);
+  if (wNew) parts.push(`1 session (${wNew.ex.length} exercises from ${shortDate(wNew.date)})`);
+  confirmSheet('Bring over FitCoach data?', `Found ${parts.join(', ')}. This is added to what is already in LIFT. Days you already logged in LIFT are left as they are.`, 'Import', () => {
+    S.bw = [...S.bw, ...bwNew].sort((a, b) => (a.date < b.date ? -1 : 1));
+    foodNew.forEach(k => { S.food[k] = c.food[k]; });
+    if (wNew) { Object.assign(S.customEx, c.newEx); S.workouts.push(wNew); S.workouts.sort((a, b) => a.ts - b.ts); }
+    if (c.name && S.profile && !S.profile.name) S.profile.name = c.name;
+    if (S.profile && S.bw.length) S.profile.weight = S.bw[S.bw.length - 1].kg;
+    save(); render(); toast('FitCoach data imported');
+  }, false);
+}
 
 /* ================= boot ================= */
 function boot() {
@@ -1257,8 +1499,9 @@ function boot() {
     if (e.target.id === 'chatIn') { e.preventDefault(); ACT.send(); }
     else if (e.target.dataset && (e.target.dataset.in === 'w' || e.target.dataset.in === 'r')) { e.preventDefault(); e.target.blur(); }
   });
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { if (S.active) keepAwake(true); restLoop(); if (!$('#sheet-root').innerHTML && !document.activeElement.matches('input')) render(); } else save(); });
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { if (S.active) keepAwake(true); restLoop(); if (!$('#sheet-root').innerHTML && !document.activeElement.matches('input')) render(); } else { save(); syncNow(); } });
   window.addEventListener('pagehide', save);
+  window.addEventListener('online', () => syncNow());
   window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferredPrompt = e; if (view === 'today') render(); });
   window.addEventListener('appinstalled', () => { deferredPrompt = null; render(); });
 
@@ -1270,6 +1513,7 @@ function boot() {
   const q = new URLSearchParams(location.search).get('tab'); if (q && VIEWS[q]) view = q;
   if (S.active) keepAwake(true);
   render(); restLoop();
+  setTimeout(() => syncNow(), 800);
   if (!S.profile) tdeeSheet(true);
 
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});

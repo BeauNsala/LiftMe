@@ -28,3 +28,9 @@ and Restore from backup if you change phones.
 - `sw.js` offline caching
 - `manifest.webmanifest` makes it installable
 - `icon-*.png`, `apple-touch-icon.png` home screen icons
+
+## Cloud sync (optional)
+
+In the app: Settings, Cloud sync. It copies your data to `lift-data.json` in a private repo you own
+(for example `lift-data`), using a fine-grained token that can only touch that repo.
+Keep that repo private. On a new phone, install LIFT and tap "New phone? Restore from cloud sync".
