@@ -34,3 +34,15 @@ and Restore from backup if you change phones.
 In the app: Settings, Cloud sync. It copies your data to `lift-data.json` in a private repo you own
 (for example `lift-data`), using a fine-grained token that can only touch that repo.
 Keep that repo private. On a new phone, install LIFT and tap "New phone? Restore from cloud sync".
+
+## Workout plans
+
+Train tab, Plans. You can build plans in the app, or import one from a PDF, a Word (.docx) file,
+a text file, a photo or screenshot, or pasted text. Imported plans open in the editor so you can
+check them before saving. Reading PDFs and photos needs signal the first time, because the
+reader downloads from a CDN.
+
+## Intermittent fasting
+
+Settings, Intermittent fasting. Pick a schedule (12:12 up to 20:4) and when your eating window
+opens. Start and end fasts from the card on the Today and Food tabs.
