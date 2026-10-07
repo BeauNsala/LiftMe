@@ -1,6 +1,6 @@
 /* LIFT service worker: caches the app so it runs with no connection.
    When you change any app file, bump CACHE (e.g. lift3-v3.0.1) so phones pick up the update. */
-const CACHE = 'lift3-v3.3.0';
+const CACHE = 'lift3-v3.4.0';
 const ASSETS = ['./', './index.html', './app.js', './manifest.webmanifest',
   './icon-192.png', './icon-512.png', './icon-maskable-512.png', './apple-touch-icon.png'];
 

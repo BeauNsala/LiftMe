@@ -1,6 +1,6 @@
 'use strict';
 /* LIFT 3: offline workout tracker, calorie tracker and on-device coach */
-const VERSION = '3.3.0';
+const VERSION = '3.4.0';
 const KEY = 'lift3:data';
 
 /* ================= helpers ================= */
@@ -196,7 +196,7 @@ function fresh() {
   return {
     v: 3, profile: null, targets: null, mode: 'gym', prog: clone(DEFAULT_PROG), plans: plansFromProg(DEFAULT_PROG),
     ladders: { push: 1, pull: 1, dip: 1 }, workouts: [], bw: [], food: {}, customFoods: [], customEx: {},
-    recent: [], cardio: [], chat: [], settings: { rest: 90, hideInstall: false, lastDeload: null }, active: null,
+    recent: [], cardio: [], chat: [], settings: { rest: 90, hideInstall: false, lastDeload: null, theme: 'dark' }, active: null,
     deleted: {}, updated: 0, sync: null,
   };
 }
@@ -633,7 +633,7 @@ function lineChart(pts, o = {}) {
   const area = `${line}L${X(x1).toFixed(1)},${H - P.b}L${X(x0).toFixed(1)},${H - P.b}Z`;
   let grid = '';
   for (let i = 0; i <= 3; i++) { const v = y0 + ((y1 - y0) * i) / 3, y = Y(v); grid += `<line x1="${P.l}" x2="${W - P.r}" y1="${y}" y2="${y}" stroke="var(--line)" stroke-width=".5"/><text x="${P.l - 6}" y="${y + 4}" text-anchor="end">${Math.round(v)}</text>`; }
-  const goal = o.goal != null ? `<line x1="${P.l}" x2="${W - P.r}" y1="${Y(o.goal)}" y2="${Y(o.goal)}" stroke="var(--green)" stroke-dasharray="4 4" stroke-width="1.5"/><text x="${W - P.r}" y="${Y(o.goal) - 5}" text-anchor="end" style="fill:var(--green)">goal ${o.goal}</text>` : '';
+  const goal = o.goal != null ? `<line x1="${P.l}" x2="${W - P.r}" y1="${Y(o.goal)}" y2="${Y(o.goal)}" stroke="var(--green)" stroke-dasharray="4 4" stroke-width="1.5"/><text x="${W - P.r}" y="${Y(o.goal) - 5}" text-anchor="end" style="fill:var(--green-ink)">goal ${o.goal}</text>` : '';
   const lp = pts[pts.length - 1];
   const fd = d => { const t = new Date(d); return `${t.getDate()} ${MON[t.getMonth()]}`; };
   return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(o.label || 'Chart')}">${grid}${goal}
@@ -650,7 +650,7 @@ function barChart(items, target) {
   let s = '';
   items.forEach((it, i) => { if (!it.y) return; const x = P.l + i * bw + bw * 0.18, h = H - P.b - Y(it.y); s += `<rect x="${x}" y="${Y(it.y)}" width="${bw * 0.64}" height="${h}" rx="3" fill="${target && it.y > target * 1.05 ? 'var(--red)' : 'var(--ink)'}" opacity="${it.y ? 0.9 : 0}"/>`; });
   items.forEach((it, i) => { if (i % 2 === 0 || i === items.length - 1) s += `<text x="${P.l + i * bw + bw / 2}" y="${H - 6}" text-anchor="middle">${it.label}</text>`; });
-  const t = target ? `<line x1="${P.l}" x2="${W - P.r}" y1="${Y(target)}" y2="${Y(target)}" stroke="var(--green)" stroke-dasharray="4 4" stroke-width="1.5"/><text x="${P.l - 6}" y="${Y(target) + 4}" text-anchor="end" style="fill:var(--green)">${fmt(target)}</text>` : '';
+  const t = target ? `<line x1="${P.l}" x2="${W - P.r}" y1="${Y(target)}" y2="${Y(target)}" stroke="var(--green)" stroke-dasharray="4 4" stroke-width="1.5"/><text x="${P.l - 6}" y="${Y(target) + 4}" text-anchor="end" style="fill:var(--green-ink)">${fmt(target)}</text>` : '';
   return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Daily calories">${s}${t}</svg>`;
 }
 
@@ -844,7 +844,14 @@ function vHistory() {
 
 /* ================= render ================= */
 const VIEWS = { today: vToday, train: vTrain, food: vFood, coach: vCoach, progress: vProgress };
+function applyTheme() {
+  const pref = S.settings.theme || 'dark';
+  const t = pref === 'auto' ? (window.matchMedia && matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark') : pref;
+  document.documentElement.setAttribute('data-theme', t);
+  const m = document.querySelector('meta[name="theme-color"]'); if (m) m.setAttribute('content', t === 'light' ? '#F3F1EC' : '#1B1F26');
+}
 function render() {
+  applyTheme();
   const el = $('#v-' + view), st = el.scrollTop;
   el.innerHTML = `<div class="wrap">${VIEWS[view]()}</div>`;
   el.scrollTop = st;
@@ -1081,6 +1088,7 @@ function newExSheet() {
 function settingsSheet() {
   const plan = curPlan(), sch = plan.schedule; const opts = [['', 'Rest'], ...plan.order.filter(id => plan.sessions[id]).map(id => [id, plan.sessions[id].name.split(':')[0]])];
   sheet(`<h2>Settings</h2>
+    <div class="field"><span>Appearance</span>${seg('theme', [['dark', 'Dark'], ['light', 'Light'], ['auto', 'Match phone']], S.settings.theme || 'dark')}</div>
     <div class="list"><button class="frow" data-act="tdee"><span><b>Profile and calorie targets</b><small>${S.targets ? `${fmt(S.targets.kcal)} kcal, ${S.targets.p} g protein` : 'Not set'}</small></span><span class="kc">${I.right}</span></button></div>
     <h3 class="list-h">Training week (${esc(plan.name)})</h3><div class="card">${[1, 2, 3, 4, 5, 6, 0].map(d => `<label class="field" style="display:flex;align-items:center;gap:12px;margin-bottom:8px"><span style="flex:1;margin:0;color:var(--ink)">${DOW[d]}</span><select class="in" style="width:150px" data-ch="sched" data-day="${d}">${opts.map(([v, l]) => `<option value="${v}" ${(sch[d] || '') === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>`).join('')}</div>
     <label class="field"><span>Default rest time</span><select class="in" data-ch="rest">${[30, 45, 60, 90, 120, 180].map(s => `<option value="${s}" ${S.settings.rest === s ? 'selected' : ''}>${s} seconds</option>`).join('')}</select></label>
@@ -1269,6 +1277,7 @@ const ACT = {
    
   },
   fastEnd: () => { const f = fastCfg(), el = Date.now() - f.active.start; if (el < 3600e3) confirmSheet('End fast?', `It's only been ${durTxt(el)}. Short fasts are not saved to your history.`, 'End fast', () => endFast(), false); else endFast(); },
+  theme: t => { S.settings.theme = t.dataset.v; save(); render(); settingsSheet(); },
   hideInstall: () => { S.settings.hideInstall = true; save(); render(); },
   install: async () => { if (!deferredPrompt) { installHelp(); return; } deferredPrompt.prompt(); try { await deferredPrompt.userChoice; } catch (e) {} deferredPrompt = null; closeSheet(); render(); },
 };
@@ -1954,6 +1963,7 @@ function boot() {
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { if (S.active) keepAwake(true); restLoop(); if (!$('#sheet-root').innerHTML && !document.activeElement.matches('input')) render(); } else { save(); syncNow(); } });
   window.addEventListener('pagehide', save);
   window.addEventListener('online', () => syncNow());
+  try { matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => { if (S.settings.theme === 'auto') applyTheme(); }); } catch (e) {}
   window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferredPrompt = e; if (view === 'today') render(); });
   window.addEventListener('appinstalled', () => { deferredPrompt = null; render(); });
 
